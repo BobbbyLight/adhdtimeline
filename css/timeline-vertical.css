@@ -1,0 +1,132 @@
+/* ==========================================================================
+   Vertical spine timeline — primary view.
+   ========================================================================== */
+
+.timeline-container { flex: 1; overflow-y: auto; padding-bottom: var(--space-7); }
+
+/* ---- Anytime pool (undated tasks) ---- */
+.anytime-pool { padding: var(--space-2) 0 var(--space-4); }
+.anytime-pool-heading {
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  padding: 0 var(--space-4);
+  margin-bottom: var(--space-2);
+}
+.anytime-pool-scroller {
+  display: flex;
+  gap: var(--space-3);
+  overflow-x: auto;
+  padding: 0 var(--space-4) var(--space-2);
+  scroll-snap-type: x proximity;
+}
+.anytime-card {
+  scroll-snap-align: start;
+  flex: 0 0 auto;
+  min-width: 180px;
+  max-width: 220px;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-radius: var(--radius-md);
+  border-left: 5px solid var(--card-category-color, var(--border));
+  background: var(--bg-elevated);
+  cursor: pointer;
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+.anytime-card:hover { transform: translateY(-2px); }
+.anytime-card-title { font-size: 0.92rem; color: var(--text-primary); }
+
+/* ---- Spine ---- */
+.timeline-vertical { position: relative; padding: var(--space-5) var(--space-4); }
+.spine-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  width: 3px;
+  transform: translateX(-50%);
+  background: linear-gradient(180deg, transparent, var(--spine-color) 4%, var(--spine-color) 96%, transparent);
+}
+
+.spine-date-divider {
+  position: relative;
+  text-align: center;
+  margin: var(--space-5) auto var(--space-4);
+  width: fit-content;
+  padding: var(--space-1) var(--space-4);
+  background: var(--bg-elevated-2);
+  border-radius: 999px;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--text-secondary);
+  z-index: 2;
+}
+
+.spine-item {
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  width: 100%;
+  margin-bottom: var(--space-4);
+  z-index: 1;
+}
+.spine-item--left { justify-content: flex-start; }
+.spine-item--right { justify-content: flex-end; }
+
+.spine-node {
+  position: absolute;
+  left: 50%;
+  top: var(--space-3);
+  transform: translateX(-50%);
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  border: 3px solid var(--bg);
+  box-shadow: 0 0 0 2px var(--border);
+  z-index: 2;
+}
+.spine-node--critical { box-shadow: 0 0 0 2px var(--critical), 0 0 10px var(--critical); }
+
+.spine-card {
+  position: relative;
+  width: calc(50% - 28px);
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4);
+  box-shadow: var(--shadow-elevation);
+  cursor: pointer;
+  overflow: hidden;
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+.spine-card:hover { transform: scale(1.02); }
+.spine-card-stripe {
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 5px;
+  background: var(--card-stripe, var(--border));
+}
+.spine-card-time { font-size: 0.78rem; color: var(--text-muted); margin-top: var(--space-1); }
+.spine-card-title { font-size: 1rem; margin: var(--space-1) 0 0; }
+.spine-card-checkbox { position: absolute; top: var(--space-3); right: var(--space-3); width: 20px; height: 20px; }
+
+.countdown-ring { position: absolute; bottom: var(--space-2); right: var(--space-2); }
+.countdown-ring-track { stroke: var(--countdown-track); }
+.countdown-ring-fill {
+  stroke: var(--countdown-fill);
+  stroke-linecap: round;
+  transition: stroke-dashoffset var(--motion-slow) linear;
+}
+
+.timeline-empty-state {
+  text-align: center;
+  color: var(--text-muted);
+  padding: var(--space-6);
+}
+
+@media (max-width: 520px) {
+  .spine-card { width: calc(50% - 20px); padding: var(--space-2) var(--space-3); }
+  .spine-node { top: var(--space-2); }
+}

@@ -1,0 +1,134 @@
+/* ==========================================================================
+   Horizontal schedule-strip timeline — secondary view.
+   ========================================================================== */
+
+.timeline-horizontal-root { display: flex; flex-direction: column; height: 100%; }
+
+.h-toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-4);
+}
+.h-nav-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: 36px;
+  height: 36px;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+.h-toolbar-label { flex: 1; font-weight: 700; }
+.h-zoom-toggle {
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+  font-size: 0.85rem;
+  color: var(--text-primary);
+}
+
+/* ---- Day view: hour ruler + lane-stacked blocks ---- */
+.h-day-scroller { flex: 1; overflow-x: auto; overflow-y: auto; padding: 0 var(--space-4) var(--space-6); }
+.h-day-inner { position: relative; padding-top: var(--space-6); }
+
+.h-ruler { position: relative; height: 28px; margin-bottom: var(--space-2); }
+.h-ruler-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 100%;
+  background: var(--border);
+}
+.h-ruler-label {
+  position: absolute;
+  top: -22px;
+  left: 4px;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.h-track {
+  position: relative;
+  border-top: 1px solid var(--border);
+  background-image: repeating-linear-gradient(
+    90deg,
+    var(--border) 0,
+    var(--border) 1px,
+    transparent 1px,
+    transparent 84px
+  );
+  opacity: 1;
+}
+.h-now-line {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  background: var(--critical);
+  z-index: 3;
+}
+
+.h-item {
+  position: absolute;
+  height: 56px;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--item-color) 22%, var(--bg-elevated));
+  border-left: 4px solid var(--item-color);
+  padding: var(--space-1) var(--space-2);
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  transition: transform var(--motion-fast) var(--ease-standard);
+}
+.h-item:hover { transform: translateY(-2px); }
+.h-item--event { border-left-style: solid; }
+.h-item--task { border-left-style: dashed; }
+.h-item--critical { box-shadow: 0 0 0 2px var(--critical); }
+.h-item-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-item-checkbox { align-self: flex-end; }
+
+/* ---- Week view: 7 agenda columns ---- */
+.h-week-grid {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(7, minmax(120px, 1fr));
+  gap: var(--space-2);
+  overflow-x: auto;
+  padding: 0 var(--space-4) var(--space-6);
+}
+.h-week-col {
+  background: var(--bg-elevated);
+  border-radius: var(--radius-md);
+  padding: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-height: 200px;
+}
+.h-week-col--today { outline: 2px solid var(--accent-1); }
+.h-week-col-header {
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-align: center;
+  color: var(--text-secondary);
+  padding-bottom: var(--space-1);
+  border-bottom: 1px solid var(--border);
+}
+.h-week-chip {
+  background: color-mix(in srgb, var(--item-color) 20%, var(--bg-elevated-2));
+  border-left: 3px solid var(--item-color);
+  border-radius: var(--radius-sm);
+  padding: var(--space-1) var(--space-2);
+  display: flex;
+  flex-direction: column;
+  cursor: pointer;
+  font-size: 0.78rem;
+}
+.h-week-chip-time { color: var(--text-muted); font-size: 0.7rem; }
+.h-week-chip-title { color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.h-week-col-empty { text-align: center; color: var(--text-muted); font-size: 0.8rem; padding: var(--space-3) 0; }
