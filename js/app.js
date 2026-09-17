@@ -7,6 +7,9 @@ import { Notifications } from "./notifications.js";
 import { Capture } from "./capture.js";
 import { IcsImport } from "./ics-import.js";
 import { Backup } from "./backup.js";
+import { ensureDefaultCategories, nextCustomColor, defaultCustomIcon } from "./categories.js";
+import { renderDatePicker } from "./date-picker.js";
+import { QuickAddRules } from "./quickAddRules.js";
 import { renderVerticalTimeline, updateCountdownRings } from "./timeline-vertical.js";
 import { renderHorizontalTimeline } from "./timeline-horizontal.js";
 
@@ -50,23 +53,42 @@ function addDays(d, n) {
   x.setDate(x.getDate() + n);
   return x;
 }
-function toDateTimeLocalValue(date) {
-  if (!date) return "";
-  const d = new Date(date);
-  const pad = (n) => String(n).padStart(2, "0");
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+function pad2(n) {
+  return String(n).padStart(2, "0");
 }
-function fromDateTimeLocalValue(value) {
-  if (!value) return null;
-  return new Date(value);
+function dateKeyLocal(d) {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+function toHHMM(date) {
+  const d = new Date(date);
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+function combineDateAndTime(date, hhmm, fallbackHour) {
+  const d = new Date(date);
+  if (hhmm) {
+    const [h, m] = hhmm.split(":").map(Number);
+    d.setHours(h, m, 0, 0);
+  } else {
+    d.setHours(fallbackHour, 0, 0, 0);
+  }
+  return d;
+}
+
+/** Dates (YYYY-MM-DD) that already have a task/event on them — feeds the date-picker's dots. */
+function computeMarkedDates() {
+  const { items } = buildTimelineItems();
+  const marked = new Set();
+  for (const item of items) marked.add(dateKeyLocal(item.start));
+  return marked;
 }
 
 // ---------------------------------------------------------------------------
 // Timeline item normalization
 // ---------------------------------------------------------------------------
 
-function makeTaskItem(task, catMap, occurrenceDate, isOverride, now) {
+function makeTaskItem(task, catMap, occurrenceDate, end, isOverride, now) {
   const categories = (task.categoryIds || []).map((id) => catMap.get(id)).filter(Boolean);
+  const allDay = Boolean(task.allDay);
   return {
     key: `task:${task.id}:${occurrenceDate.toISOString()}`,
     sourceType: "task",
@@ -74,9 +96,10 @@ function makeTaskItem(task, catMap, occurrenceDate, isOverride, now) {
     occurrenceDate,
     title: task.title,
     start: occurrenceDate,
-    end: null,
+    end,
     isToday: startOfDay(occurrenceDate).getTime() === startOfDay(now).getTime(),
-    isTimed: true,
+    isTimed: !allDay,
+    allDay,
     category: categories[0] || null,
     categories,
     importance: task.importance,
@@ -89,6 +112,7 @@ function makeTaskItem(task, catMap, occurrenceDate, isOverride, now) {
 
 function makeEventItem(evt, catMap, start, end, isOverride, now) {
   const categories = (evt.categoryIds || []).map((id) => catMap.get(id)).filter(Boolean);
+  const allDay = Boolean(evt.allDay);
   return {
     key: `event:${evt.id}:${start.toISOString()}`,
     sourceType: "event",
@@ -98,7 +122,8 @@ function makeEventItem(evt, catMap, start, end, isOverride, now) {
     start,
     end,
     isToday: startOfDay(start).getTime() === startOfDay(now).getTime(),
-    isTimed: true,
+    isTimed: !allDay,
+    allDay,
     category: categories[0] || null,
     categories,
     importance: evt.importance,
@@ -118,12 +143,21 @@ function buildTimelineItems() {
   const undatedTasks = [];
 
   for (const task of state.tasks) {
+    const hasDuration = Boolean(task.endTime && task.dueDate);
+    const durationMs = hasDuration ? new Date(task.endTime).getTime() - new Date(task.dueDate).getTime() : 0;
+
     if (task.recurrence && task.recurrence.rule && task.dueDate) {
       const occurrences = Recurrence.expandOccurrences(task, rangeStart, rangeEnd, new Date(task.dueDate));
-      for (const occ of occurrences) items.push(makeTaskItem(occ.data, catMap, occ.occurrenceDate, occ.isOverride, now));
+      for (const occ of occurrences) {
+        const end = hasDuration ? new Date(occ.occurrenceDate.getTime() + durationMs) : null;
+        items.push(makeTaskItem(occ.data, catMap, occ.occurrenceDate, end, occ.isOverride, now));
+      }
     } else if (task.dueDate) {
       const d = new Date(task.dueDate);
-      if (d >= rangeStart && d <= rangeEnd) items.push(makeTaskItem(task, catMap, d, false, now));
+      if (d >= rangeStart && d <= rangeEnd) {
+        const end = hasDuration ? new Date(task.endTime) : null;
+        items.push(makeTaskItem(task, catMap, d, end, false, now));
+      }
     } else {
       undatedTasks.push(task);
     }
@@ -203,28 +237,261 @@ async function toggleTaskDone(task) {
 }
 
 // ---------------------------------------------------------------------------
-// Quick add
+// "When" section — shared date-picker + all-day/timed control, used by the
+// quick-add panel and both detail modals so date entry works identically
+// everywhere in the app.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {HTMLElement} container
+ * @param {{mode:'no-date'|'all-day'|'timed', date:Date|null, startTime:string|null, endTime:string|null}} initial
+ * @param {(state:object)=>void} onChange
+ * @param {{allowNoDate?: boolean}} [options]
+ */
+function renderWhenSection(container, initial, onChange, options = {}) {
+  const allowNoDate = options.allowNoDate !== false;
+  const whenState = { ...initial };
+  const markedDates = computeMarkedDates();
+
+  function draw() {
+    container.innerHTML = "";
+    container.className = "when-section";
+
+    const modeRow = document.createElement("div");
+    modeRow.className = "when-mode-row";
+    const modes = allowNoDate
+      ? [["no-date", "No date"], ["all-day", "All day"], ["timed", "Timed"]]
+      : [["all-day", "All day"], ["timed", "Timed"]];
+    for (const [key, label] of modes) {
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = "when-mode-btn" + (whenState.mode === key ? " is-selected" : "");
+      btn.textContent = label;
+      btn.addEventListener("click", () => {
+        whenState.mode = key;
+        if (key !== "no-date" && !whenState.date) whenState.date = new Date();
+        draw();
+        onChange(whenState);
+      });
+      modeRow.appendChild(btn);
+    }
+    container.appendChild(modeRow);
+
+    if (whenState.mode !== "no-date") {
+      const pickerContainer = document.createElement("div");
+      pickerContainer.className = "when-date-picker";
+      container.appendChild(pickerContainer);
+      renderDatePicker(pickerContainer, {
+        selectedDate: whenState.date,
+        markedDates,
+        onSelect: (date) => {
+          whenState.date = date;
+          onChange(whenState);
+        },
+      });
+    }
+
+    if (whenState.mode === "timed") {
+      const timeRow = document.createElement("div");
+      timeRow.className = "when-time-row";
+
+      const startLabel = document.createElement("label");
+      startLabel.className = "field-label when-time-label";
+      startLabel.append("Start");
+      const startInput = document.createElement("input");
+      startInput.type = "time";
+      startInput.className = "field-input when-start-time";
+      startInput.value = whenState.startTime || "";
+      startInput.addEventListener("input", () => {
+        whenState.startTime = startInput.value;
+        onChange(whenState);
+      });
+      startLabel.appendChild(startInput);
+
+      const endLabel = document.createElement("label");
+      endLabel.className = "field-label when-time-label";
+      endLabel.append("End");
+      const endInput = document.createElement("input");
+      endInput.type = "time";
+      endInput.className = "field-input when-end-time";
+      endInput.value = whenState.endTime || "";
+      endInput.addEventListener("input", () => {
+        whenState.endTime = endInput.value;
+        onChange(whenState);
+      });
+      endLabel.appendChild(endInput);
+
+      timeRow.append(startLabel, endLabel);
+      container.appendChild(timeRow);
+    }
+  }
+
+  draw();
+  return { getState: () => whenState };
+}
+
+function whenStateFromTask(task) {
+  if (!task.dueDate) return { mode: "no-date", date: null, startTime: null, endTime: null };
+  if (task.allDay) return { mode: "all-day", date: new Date(task.dueDate), startTime: null, endTime: null };
+  return {
+    mode: "timed",
+    date: new Date(task.dueDate),
+    startTime: toHHMM(task.dueDate),
+    endTime: task.endTime ? toHHMM(task.endTime) : null,
+  };
+}
+
+function whenStateFromEvent(evt) {
+  if (!evt.startTime || evt.allDay) {
+    return { mode: "all-day", date: evt.startTime ? new Date(evt.startTime) : new Date(), startTime: null, endTime: null };
+  }
+  return {
+    mode: "timed",
+    date: new Date(evt.startTime),
+    startTime: toHHMM(evt.startTime),
+    endTime: evt.endTime ? toHHMM(evt.endTime) : null,
+  };
+}
+
+function taskFieldsFromWhen(whenState) {
+  if (whenState.mode === "no-date") return { dueDate: null, endTime: null, allDay: false };
+  if (whenState.mode === "all-day") {
+    const d = startOfDay(whenState.date || new Date());
+    return { dueDate: d.toISOString(), endTime: null, allDay: true };
+  }
+  const date = whenState.date || new Date();
+  const start = combineDateAndTime(date, whenState.startTime, 9);
+  const end = whenState.endTime ? combineDateAndTime(date, whenState.endTime, 9) : null;
+  return { dueDate: start.toISOString(), endTime: end ? end.toISOString() : null, allDay: false };
+}
+
+function eventFieldsFromWhen(whenState) {
+  const date = whenState.date || new Date();
+  if (whenState.mode === "all-day") {
+    const start = startOfDay(date);
+    const end = new Date(start);
+    end.setHours(23, 59, 59, 0);
+    return { startTime: start.toISOString(), endTime: end.toISOString(), allDay: true };
+  }
+  const start = combineDateAndTime(date, whenState.startTime, 9);
+  const end = whenState.endTime ? combineDateAndTime(date, whenState.endTime, 9) : new Date(start.getTime() + 3600000);
+  return { startTime: start.toISOString(), endTime: end.toISOString(), allDay: false };
+}
+
+// ---------------------------------------------------------------------------
+// Quick add — text/voice capture opens a confirm-before-create panel
 // ---------------------------------------------------------------------------
 
 function setupQuickAdd() {
-  Capture.renderQuickAdd(el.quickAddContainer, async (parsed) => {
-    if (parsed.dueDate) {
-      const patch = { title: parsed.title, dueDate: parsed.dueDate.toISOString() };
-      if (parsed.recurrenceRule) patch.recurrence = { rule: parsed.recurrenceRule, exceptions: [], overrides: {} };
-      await Storage.addTask(patch);
+  Capture.renderQuickAdd(el.quickAddContainer, (parsed) => openQuickAddPanel(parsed));
+}
+
+function openQuickAddPanel(parsed) {
+  const expansion = QuickAddRules.expandQuickAddText(parsed.title);
+  const matchedCategoryIds = expansion.categoryNames
+    .map((name) => state.categories.find((c) => c.name.toLowerCase() === name.toLowerCase())?.id)
+    .filter(Boolean);
+
+  const draft = {
+    type: "task", // task | event
+    title: expansion.title,
+    categoryIds: matchedCategoryIds,
+    recurrence: parsed.recurrenceRule ? { rule: parsed.recurrenceRule, exceptions: [], overrides: {} } : null,
+  };
+  const initialWhen = parsed.dueDate
+    ? { mode: "timed", date: parsed.dueDate, startTime: toHHMM(parsed.dueDate), endTime: null }
+    : { mode: "no-date", date: null, startTime: null, endTime: null };
+
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay quick-add-panel-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card quick-add-panel">
+      <button type="button" class="modal-close-btn" aria-label="Close">×</button>
+      <h2 class="modal-heading">Quick Add</h2>
+
+      <label class="field-label">Title
+        <input type="text" class="qa-title-input field-input" />
+      </label>
+
+      <div class="qa-section">
+        <h3 class="qa-section-header">Type</h3>
+        <div class="qa-type-row">
+          <button type="button" class="qa-type-btn" data-type="task">Task</button>
+          <button type="button" class="qa-type-btn" data-type="event">Event</button>
+        </div>
+      </div>
+
+      <div class="qa-section">
+        <h3 class="qa-section-header">When</h3>
+        <div class="qa-when-container"></div>
+      </div>
+
+      <div class="qa-section">
+        <h3 class="qa-section-header">Category</h3>
+        <div class="qa-category-container"></div>
+      </div>
+
+      <div class="modal-actions">
+        <button type="button" class="btn-secondary qa-cancel-btn">Cancel</button>
+        <button type="button" class="btn-primary qa-add-btn">Add</button>
+      </div>
+    </div>`;
+  el.modalRoot.innerHTML = "";
+  el.modalRoot.appendChild(overlay);
+
+  const titleInput = overlay.querySelector(".qa-title-input");
+  titleInput.value = draft.title;
+
+  const typeButtons = overlay.querySelectorAll(".qa-type-btn");
+  function refreshTypeButtons() {
+    typeButtons.forEach((btn) => btn.classList.toggle("is-selected", btn.dataset.type === draft.type));
+  }
+  typeButtons.forEach((btn) => {
+    btn.addEventListener("click", () => {
+      draft.type = btn.dataset.type;
+      refreshTypeButtons();
+      refreshWhen();
+    });
+  });
+  refreshTypeButtons();
+
+  const whenContainer = overlay.querySelector(".qa-when-container");
+  let whenController;
+  function refreshWhen() {
+    const allowNoDate = draft.type === "task";
+    const current = whenController ? whenController.getState() : initialWhen;
+    const seed = !allowNoDate && current.mode === "no-date" ? { ...current, mode: "all-day", date: new Date() } : current;
+    whenController = renderWhenSection(whenContainer, seed, () => {}, { allowNoDate });
+  }
+  refreshWhen();
+
+  const catContainer = overlay.querySelector(".qa-category-container");
+  function refreshCategories() {
+    renderCategoryPicker(catContainer, draft.categoryIds, (next) => {
+      draft.categoryIds = next;
+      refreshCategories();
+    });
+  }
+  refreshCategories();
+
+  overlay.querySelector(".modal-close-btn").addEventListener("click", closeModal);
+  overlay.querySelector(".qa-cancel-btn").addEventListener("click", closeModal);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeModal();
+  });
+
+  overlay.querySelector(".qa-add-btn").addEventListener("click", async () => {
+    const title = titleInput.value.trim();
+    if (!title) return;
+    const whenState = whenController.getState();
+
+    if (draft.type === "task") {
+      await Storage.addTask({ title, categoryIds: draft.categoryIds, recurrence: draft.recurrence, ...taskFieldsFromWhen(whenState) });
     } else {
-      const patch = { title: parsed.title };
-      if (parsed.recurrenceRule) {
-        // A recurring task needs a start date to anchor the rule — default to
-        // today at 9am rather than the exact current moment (matches the
-        // same "no explicit time" default used elsewhere in capture.js).
-        const anchor = new Date();
-        anchor.setHours(9, 0, 0, 0);
-        patch.dueDate = anchor.toISOString();
-        patch.recurrence = { rule: parsed.recurrenceRule, exceptions: [], overrides: {} };
-      }
-      await Storage.addTask(patch);
+      await Storage.addEvent({ title, categoryIds: draft.categoryIds, recurrence: draft.recurrence, ...eventFieldsFromWhen(whenState) });
     }
+
+    closeModal();
     await reloadData();
     renderTimeline();
   });
@@ -292,6 +559,7 @@ function showResurfaceToast(task, dismissedSet) {
 function getDueReminders() {
   const { items } = buildTimelineItems();
   return items
+    .filter((item) => !item.allDay) // all-day items have no meaningful due *moment* to alert on
     .filter((item) => (item.sourceType === "task" ? item.status !== "done" : true))
     .map((item) => ({
       key: item.key,
@@ -312,7 +580,7 @@ async function runDueTodaySummary() {
 }
 
 // ---------------------------------------------------------------------------
-// Category picker (shared by task + event forms)
+// Category picker (shared by task + event forms + the quick-add panel)
 // ---------------------------------------------------------------------------
 
 function renderCategoryPicker(container, selectedIds, onChange) {
@@ -326,7 +594,12 @@ function renderCategoryPicker(container, selectedIds, onChange) {
     chip.type = "button";
     chip.className = "category-chip" + (selectedIds.includes(cat.id) ? " is-selected" : "");
     chip.style.setProperty("--chip-color", cat.color);
-    chip.textContent = cat.name;
+    const icon = document.createElement("span");
+    icon.className = "category-chip-icon";
+    icon.textContent = cat.icon || "🏷️";
+    const name = document.createElement("span");
+    name.textContent = cat.name;
+    chip.append(icon, name);
     chip.addEventListener("click", () => {
       const next = selectedIds.includes(cat.id) ? selectedIds.filter((id) => id !== cat.id) : [...selectedIds, cat.id];
       onChange(next);
@@ -344,7 +617,7 @@ function renderCategoryPicker(container, selectedIds, onChange) {
   const colorInput = document.createElement("input");
   colorInput.type = "color";
   colorInput.className = "category-add-color";
-  colorInput.value = "#7c9eff";
+  colorInput.value = nextCustomColor(state.categories.length);
   const addBtn = document.createElement("button");
   addBtn.type = "button";
   addBtn.className = "category-add-btn";
@@ -352,7 +625,7 @@ function renderCategoryPicker(container, selectedIds, onChange) {
   addBtn.addEventListener("click", async () => {
     const name = nameInput.value.trim();
     if (!name) return;
-    const category = await Storage.addCategory({ name, color: colorInput.value });
+    const category = await Storage.addCategory({ name, color: colorInput.value, icon: defaultCustomIcon() });
     state.categories.push(category);
     nameInput.value = "";
     onChange([...selectedIds, category.id]);
@@ -768,12 +1041,22 @@ function renderTaskModal(draft, base, occurrenceDate) {
       <label class="field-label">Title
         <input type="text" class="task-title-input field-input" />
       </label>
-      <div class="field-label">Notes</div>
-      <div class="task-notes-editor"></div>
-      <div class="field-label">Photos</div>
-      <div class="photo-editor task-photo-editor"></div>
-      <div class="field-label">Categories</div>
-      <div class="task-category-picker"></div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">When</h3>
+        <div class="task-when-container"></div>
+      </div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Category</h3>
+        <div class="task-category-picker"></div>
+      </div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Notes</h3>
+        <div class="task-notes-editor"></div>
+      </div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Photos</h3>
+        <div class="photo-editor task-photo-editor"></div>
+      </div>
       <div class="field-row">
         <label class="field-label">Importance
           <select class="task-importance-select field-input">
@@ -787,14 +1070,14 @@ function renderTaskModal(draft, base, occurrenceDate) {
           <input type="text" class="task-estimate-input field-input" placeholder="e.g. 15 min" />
         </label>
       </div>
-      <label class="field-label">Due date/time
-        <input type="datetime-local" class="task-due-input field-input" />
-      </label>
-      <button type="button" class="clear-due-btn">No due date (undated)</button>
-      <div class="field-label">Repeats</div>
-      <div class="task-recurrence-editor"></div>
-      <div class="field-label">Steps</div>
-      <div class="task-chunk-editor"></div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Repeats</h3>
+        <div class="task-recurrence-editor"></div>
+      </div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Steps</h3>
+        <div class="task-chunk-editor"></div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn-speak">🔊 Read aloud</button>
         <button type="button" class="btn-danger task-delete-btn">Delete</button>
@@ -810,8 +1093,9 @@ function renderTaskModal(draft, base, occurrenceDate) {
   importanceSelect.value = draft.importance;
   const estimateInput = overlay.querySelector(".task-estimate-input");
   estimateInput.value = draft.timeEstimate || "";
-  const dueInput = overlay.querySelector(".task-due-input");
-  dueInput.value = toDateTimeLocalValue(draft.dueDate);
+
+  const whenContainer = overlay.querySelector(".task-when-container");
+  const whenController = renderWhenSection(whenContainer, whenStateFromTask(draft), () => {}, { allowNoDate: true });
 
   const notesContainer = overlay.querySelector(".task-notes-editor");
   function refreshNotes() {
@@ -842,15 +1126,11 @@ function renderTaskModal(draft, base, occurrenceDate) {
   refreshChunks();
 
   const recContainer = overlay.querySelector(".task-recurrence-editor");
-  renderRecurrenceEditor(recContainer, draft.recurrence, () => (dueInput.value ? new Date(dueInput.value) : new Date()), (next) => {
+  renderRecurrenceEditor(recContainer, draft.recurrence, () => whenController.getState().date || new Date(), (next) => {
     draft.recurrence = next;
   });
 
   renderPhotoEditor(overlay.querySelector(".task-photo-editor"), base.id);
-
-  overlay.querySelector(".clear-due-btn").addEventListener("click", () => {
-    dueInput.value = "";
-  });
 
   overlay.querySelector(".modal-close-btn").addEventListener("click", closeModal);
   overlay.addEventListener("click", (e) => { if (e.target === overlay) closeModal(); });
@@ -885,8 +1165,8 @@ function renderTaskModal(draft, base, occurrenceDate) {
       categoryIds: draft.categoryIds || [],
       importance: importanceSelect.value,
       timeEstimate: estimateInput.value,
-      dueDate: dueInput.value ? fromDateTimeLocalValue(dueInput.value).toISOString() : null,
       chunks: draft.chunks,
+      ...taskFieldsFromWhen(whenController.getState()),
     };
 
     if (base.recurrence && occurrenceDate) {
@@ -933,13 +1213,13 @@ function renderEventModal(draft, base, occurrenceDate) {
       <label class="field-label">Title
         <input type="text" class="event-title-input field-input" />
       </label>
-      <div class="field-row">
-        <label class="field-label">Starts
-          <input type="datetime-local" class="event-start-input field-input" />
-        </label>
-        <label class="field-label">Ends
-          <input type="datetime-local" class="event-end-input field-input" />
-        </label>
+      <div class="qa-section">
+        <h3 class="qa-section-header">When</h3>
+        <div class="event-when-container"></div>
+      </div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Category</h3>
+        <div class="event-category-picker"></div>
       </div>
       <label class="field-label">📍 Location
         <input type="text" class="event-location-input field-input" />
@@ -955,12 +1235,14 @@ function renderEventModal(draft, base, occurrenceDate) {
           <input type="text" class="event-dialincode-input field-input" />
         </label>
       </div>
-      <div class="field-label">Notes</div>
-      <div class="event-notes-editor"></div>
-      <div class="field-label">Photos</div>
-      <div class="photo-editor event-photo-editor"></div>
-      <div class="field-label">Categories</div>
-      <div class="event-category-picker"></div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Notes</h3>
+        <div class="event-notes-editor"></div>
+      </div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Photos</h3>
+        <div class="photo-editor event-photo-editor"></div>
+      </div>
       <label class="field-label">Importance
         <select class="event-importance-select field-input">
           <option value="low">Low</option>
@@ -969,8 +1251,10 @@ function renderEventModal(draft, base, occurrenceDate) {
           <option value="critical">Critical</option>
         </select>
       </label>
-      <div class="field-label">Repeats</div>
-      <div class="event-recurrence-editor"></div>
+      <div class="qa-section">
+        <h3 class="qa-section-header">Repeats</h3>
+        <div class="event-recurrence-editor"></div>
+      </div>
       <div class="modal-actions">
         <button type="button" class="btn-speak">🔊 Read aloud</button>
         <button type="button" class="btn-danger event-delete-btn">Delete</button>
@@ -981,13 +1265,14 @@ function renderEventModal(draft, base, occurrenceDate) {
   el.modalRoot.appendChild(overlay);
 
   overlay.querySelector(".event-title-input").value = draft.title;
-  overlay.querySelector(".event-start-input").value = toDateTimeLocalValue(draft.startTime);
-  overlay.querySelector(".event-end-input").value = toDateTimeLocalValue(draft.endTime);
   overlay.querySelector(".event-location-input").value = draft.location || "";
   overlay.querySelector(".event-maplink-input").value = draft.mapLink || "";
   overlay.querySelector(".event-dialin-input").value = draft.dialInNumber || "";
   overlay.querySelector(".event-dialincode-input").value = draft.dialInCode || "";
   overlay.querySelector(".event-importance-select").value = draft.importance;
+
+  const whenContainer = overlay.querySelector(".event-when-container");
+  const whenController = renderWhenSection(whenContainer, whenStateFromEvent(draft), () => {}, { allowNoDate: false });
 
   const notesContainer = overlay.querySelector(".event-notes-editor");
   function refreshNotes() {
@@ -1007,9 +1292,8 @@ function renderEventModal(draft, base, occurrenceDate) {
   }
   refreshCategories();
 
-  const startInput = overlay.querySelector(".event-start-input");
   const recContainer = overlay.querySelector(".event-recurrence-editor");
-  renderRecurrenceEditor(recContainer, draft.recurrence, () => (startInput.value ? new Date(startInput.value) : new Date()), (next) => {
+  renderRecurrenceEditor(recContainer, draft.recurrence, () => whenController.getState().date || new Date(), (next) => {
     draft.recurrence = next;
   });
 
@@ -1042,11 +1326,8 @@ function renderEventModal(draft, base, occurrenceDate) {
   });
 
   overlay.querySelector(".event-save-btn").addEventListener("click", async () => {
-    const endInput = overlay.querySelector(".event-end-input");
     const patch = {
       title: overlay.querySelector(".event-title-input").value.trim() || "Untitled event",
-      startTime: fromDateTimeLocalValue(startInput.value)?.toISOString() || draft.startTime,
-      endTime: fromDateTimeLocalValue(endInput.value)?.toISOString() || draft.endTime,
       location: overlay.querySelector(".event-location-input").value,
       mapLink: overlay.querySelector(".event-maplink-input").value,
       dialInNumber: overlay.querySelector(".event-dialin-input").value,
@@ -1054,6 +1335,7 @@ function renderEventModal(draft, base, occurrenceDate) {
       notes: draft.notes.filter((n) => n.trim()),
       categoryIds: draft.categoryIds || [],
       importance: overlay.querySelector(".event-importance-select").value,
+      ...eventFieldsFromWhen(whenController.getState()),
     };
 
     if (base.recurrence && occurrenceDate) {
@@ -1338,6 +1620,7 @@ function startNotificationEngine() {
 
 async function init() {
   state.settings = await Theming.init();
+  await ensureDefaultCategories(Storage);
   await reloadData();
 
   state.viewMode = await Storage.getSetting("viewMode", "vertical");

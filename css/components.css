@@ -183,6 +183,43 @@
 .field-row { display: flex; gap: var(--space-3); flex-wrap: wrap; }
 .field-row > .field-label { flex: 1; min-width: 140px; }
 
+/* ---- Clearly-headed sections (quick-add panel + detail modals) ---- */
+.qa-section {
+  margin: var(--space-4) 0;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.qa-section:first-of-type { border-top: none; padding-top: 0; }
+.qa-section-header {
+  margin: 0 0 var(--space-2);
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+/* ---- Quick-add panel ---- */
+.quick-add-panel .qa-title-input {
+  font-size: 1.1rem;
+  padding: var(--space-3);
+}
+.qa-type-row { display: flex; gap: var(--space-2); }
+.qa-type-btn {
+  flex: 1;
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+}
+.qa-type-btn.is-selected {
+  background: var(--accent-3);
+  color: var(--bg);
+  font-weight: 700;
+  border-color: transparent;
+}
+
 .clear-due-btn {
   background: none;
   border: none;
@@ -247,6 +284,9 @@
 /* ---- Categories (color-first pattern recognition) ---- */
 .category-chip-row { display: flex; flex-wrap: wrap; gap: var(--space-2); margin-bottom: var(--space-3); }
 .category-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
   border: 2px solid var(--chip-color, var(--border));
   background: transparent;
   color: var(--text-primary);
@@ -255,6 +295,7 @@
   font-size: 0.85rem;
 }
 .category-chip.is-selected { background: var(--chip-color, var(--accent-1)); color: var(--bg); font-weight: 700; }
+.category-chip-icon { font-size: 0.95em; }
 .category-add-row { display: flex; gap: var(--space-2); align-items: center; }
 .category-add-name { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: var(--space-2); color: var(--text-primary); }
 .category-add-color { width: 40px; height: 36px; border: none; background: none; padding: 0; }

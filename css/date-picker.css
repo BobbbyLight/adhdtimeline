@@ -1,0 +1,106 @@
+/* ==========================================================================
+   date-picker.js — month-grid calendar control
+   ========================================================================== */
+
+.date-picker {
+  background: var(--bg-elevated-2);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.date-picker-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+.date-picker-month-label {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.date-picker-nav-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  width: 32px;
+  height: 32px;
+  font-size: 1.1rem;
+  color: var(--text-primary);
+}
+
+.date-picker-weekday-row {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  text-align: center;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  margin-bottom: var(--space-1);
+}
+
+.date-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 2px;
+}
+
+.date-picker-day {
+  position: relative;
+  aspect-ratio: 1;
+  border: none;
+  background: transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  font-size: 0.85rem;
+}
+.date-picker-day:hover { background: var(--bg-elevated); }
+.date-picker-day.is-outside-month { color: var(--text-muted); opacity: 0.5; }
+.date-picker-day.is-today .date-picker-day-num {
+  color: var(--accent-1);
+  font-weight: 700;
+}
+.date-picker-day.is-selected {
+  background: var(--accent-1);
+}
+.date-picker-day.is-selected .date-picker-day-num { color: var(--bg); font-weight: 700; }
+.date-picker-day-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--accent-2);
+}
+.date-picker-day.is-selected .date-picker-day-dot { background: var(--bg); }
+
+/* ---- "When" section shared by quick-add + detail modals ---- */
+.when-mode-row {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+.when-mode-btn {
+  flex: 1;
+  background: var(--bg-elevated-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: var(--space-2) var(--space-3);
+  color: var(--text-primary);
+  font-size: 0.88rem;
+}
+.when-mode-btn.is-selected {
+  background: var(--accent-1);
+  color: var(--bg);
+  font-weight: 700;
+  border-color: transparent;
+}
+.when-time-row {
+  display: flex;
+  gap: var(--space-3);
+}
+.when-time-label {
+  flex: 1;
+}
