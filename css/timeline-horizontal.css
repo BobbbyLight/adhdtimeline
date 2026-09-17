@@ -117,6 +117,7 @@
 .h-item:hover { transform: translateY(-2px); }
 .h-item--event { border-left-style: solid; }
 .h-item--task { border-left-style: dashed; }
+.h-item--gcal { border: 1px dashed var(--border); border-left-width: 4px; border-left-style: solid; }
 .h-item--critical { box-shadow: 0 0 0 2px var(--critical); }
 .h-item-title { font-size: 0.82rem; font-weight: 600; color: var(--text-primary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .h-item-checkbox { align-self: flex-end; }

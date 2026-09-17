@@ -4,7 +4,7 @@
  * so a full precache + cache-first strategy is enough for true offline use.
  */
 
-const CACHE_VERSION = "v2";
+const CACHE_VERSION = "v3";
 const CACHE_NAME = `adhd-timeline-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -32,6 +32,7 @@ const PRECACHE_URLS = [
   "js/categories.js",
   "js/date-picker.js",
   "js/quickAddRules.js",
+  "js/gcal-sync.js",
   "js/timeline-vertical.js",
   "js/timeline-horizontal.js",
   "js/vendor/rrule.js",
@@ -63,6 +64,9 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+  // Google Identity Services / Calendar API calls (opt-in, see gcal-sync.js)
+  // go straight to the network — this cache is for the local app shell only.
+  if (new URL(event.request.url).origin !== self.location.origin) return;
 
   event.respondWith(
     caches.match(event.request).then((cached) => {
