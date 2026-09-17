@@ -134,23 +134,68 @@ function renderDayTrack(dayItems, { onItemClick, onToggleTaskDone }) {
   return track;
 }
 
+function renderAllDayRow(allDayItems, { onItemClick, onToggleTaskDone }) {
+  const row = document.createElement("div");
+  row.className = "h-allday-row";
+  const label = document.createElement("span");
+  label.className = "h-allday-label";
+  label.textContent = "All day";
+  row.appendChild(label);
+
+  for (const item of allDayItems) {
+    const chip = document.createElement("div");
+    chip.className = `h-allday-chip h-item--${item.sourceType}`;
+    chip.style.setProperty("--item-color", categoryColor(item));
+    chip.setAttribute("role", "button");
+    chip.tabIndex = 0;
+    chip.textContent = item.title;
+
+    if (item.sourceType === "task") {
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.className = "h-item-checkbox";
+      checkbox.checked = item.status === "done";
+      checkbox.addEventListener("click", (e) => {
+        e.stopPropagation();
+        onToggleTaskDone(item.raw);
+      });
+      chip.appendChild(checkbox);
+    }
+
+    chip.addEventListener("click", () => onItemClick(item));
+    chip.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" || e.key === " ") {
+        e.preventDefault();
+        onItemClick(item);
+      }
+    });
+    row.appendChild(chip);
+  }
+
+  return row;
+}
+
 function renderDayView(container, viewDate, items, handlers) {
   const dayStart = startOfDay(viewDate);
   const dayEnd = addDays(dayStart, 1);
   const dayItems = items.filter((i) => i.start >= dayStart && i.start < dayEnd);
+  const allDayItems = dayItems.filter((i) => i.allDay);
+  const timedItems = dayItems.filter((i) => !i.allDay);
+
+  if (allDayItems.length) container.appendChild(renderAllDayRow(allDayItems, handlers));
 
   const scroller = document.createElement("div");
   scroller.className = "h-day-scroller";
   const inner = document.createElement("div");
   inner.className = "h-day-inner";
   inner.appendChild(renderHourRuler());
-  inner.appendChild(renderDayTrack(dayItems, handlers));
+  inner.appendChild(renderDayTrack(timedItems, handlers));
   scroller.appendChild(inner);
   container.appendChild(scroller);
 
   // Scroll to a sensible starting point: 2 hours before the first item, or 7am.
   requestAnimationFrame(() => {
-    const firstHour = dayItems.length ? Math.max(0, dayItems[0].start.getHours() - 2) : 7;
+    const firstHour = timedItems.length ? Math.max(0, timedItems[0].start.getHours() - 2) : 7;
     scroller.scrollLeft = firstHour * PX_PER_HOUR;
   });
 }
@@ -182,7 +227,7 @@ function renderWeekView(container, viewDate, items, categories, handlers) {
       chip.tabIndex = 0;
       const time = document.createElement("span");
       time.className = "h-week-chip-time";
-      time.textContent = item.start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+      time.textContent = item.allDay ? "All day" : item.start.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
       const title = document.createElement("span");
       title.className = "h-week-chip-title";
       title.textContent = item.title;

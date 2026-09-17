@@ -114,7 +114,9 @@ function newTaskDefaults() {
     title: "",
     notes: [], // array of short strings — rendered as a bulleted list
     photoIds: [],
-    dueDate: null, // ISO string or null — undated is first-class
+    dueDate: null, // ISO string or null — undated is first-class; doubles as "start" when timed
+    endTime: null, // ISO string or null — optional, sizes the horizontal-view tile by duration
+    allDay: false, // true = tied to a date but no specific clock time (no countdown ring, no duration block)
     categoryIds: [],
     importance: "normal", // low | normal | high | critical
     timeEstimate: "", // free text, e.g. "15 min"
@@ -177,6 +179,7 @@ function newEventDefaults() {
     title: "",
     startTime: null, // ISO string, required
     endTime: null, // ISO string, required
+    allDay: false, // true = spans the whole day, no specific clock time
     location: "",
     mapLink: "",
     dialInNumber: "",
@@ -223,8 +226,8 @@ async function touchEventOpened(id) {
 // Categories — shared pool for tasks and events
 // ---------------------------------------------------------------------------
 
-async function addCategory({ id, name, color, createdAt }) {
-  const category = { id: id || uid(), name, color, createdAt: createdAt || Date.now() };
+async function addCategory({ id, name, color, icon, createdAt }) {
+  const category = { id: id || uid(), name, color, icon: icon || "🏷️", createdAt: createdAt || Date.now() };
   return putRecord("categories", category);
 }
 

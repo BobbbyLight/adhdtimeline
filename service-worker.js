@@ -4,7 +4,7 @@
  * so a full precache + cache-first strategy is enough for true offline use.
  */
 
-const CACHE_VERSION = "v1";
+const CACHE_VERSION = "v2";
 const CACHE_NAME = `adhd-timeline-${CACHE_VERSION}`;
 
 const PRECACHE_URLS = [
@@ -15,6 +15,7 @@ const PRECACHE_URLS = [
   "css/base.css",
   "css/fonts.css",
   "css/components.css",
+  "css/date-picker.css",
   "css/timeline-vertical.css",
   "css/timeline-horizontal.css",
   "js/app.js",
@@ -28,6 +29,9 @@ const PRECACHE_URLS = [
   "js/capture.js",
   "js/ics-import.js",
   "js/backup.js",
+  "js/categories.js",
+  "js/date-picker.js",
+  "js/quickAddRules.js",
   "js/timeline-vertical.js",
   "js/timeline-horizontal.js",
   "js/vendor/rrule.js",

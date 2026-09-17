@@ -28,8 +28,9 @@ function getEffectiveStatus(task) {
 
 function formatTimeLabel(item) {
   if (!item.start) return "";
+  if (item.allDay) return "All day";
   const opts = { hour: "numeric", minute: "2-digit" };
-  if (item.end && item.sourceType === "event") {
+  if (item.end) {
     return `${item.start.toLocaleTimeString([], opts)} – ${item.end.toLocaleTimeString([], opts)}`;
   }
   return item.start.toLocaleTimeString([], opts);
@@ -119,6 +120,13 @@ function renderAnytimeCard(task, { ripeningEnabled, onItemClick, onToggleTaskDon
     onToggleTaskDone(task);
   });
 
+  if (taskCategories[0]) {
+    const icon = document.createElement("span");
+    icon.className = "anytime-card-icon";
+    icon.textContent = taskCategories[0].icon || "🏷️";
+    card.appendChild(icon);
+  }
+
   const title = document.createElement("span");
   title.className = "anytime-card-title";
   title.textContent = task.title;
@@ -152,15 +160,24 @@ function renderSpineCard(item, side, { onItemClick, onToggleTaskDone }) {
   const stripe = document.createElement("div");
   stripe.className = "spine-card-stripe";
 
+  const titleRow = document.createElement("div");
+  titleRow.className = "spine-card-title-row";
+  if (item.category) {
+    const icon = document.createElement("span");
+    icon.className = "spine-card-icon";
+    icon.textContent = item.category.icon || "🏷️";
+    titleRow.appendChild(icon);
+  }
+  const title = document.createElement("h3");
+  title.className = "spine-card-title";
+  title.textContent = item.title;
+  titleRow.appendChild(title);
+
   const time = document.createElement("div");
   time.className = "spine-card-time";
   time.textContent = formatTimeLabel(item);
 
-  const title = document.createElement("h3");
-  title.className = "spine-card-title";
-  title.textContent = item.title;
-
-  card.append(stripe, time, title);
+  card.append(stripe, titleRow, time);
 
   if (item.sourceType === "task") {
     if (getEffectiveStatus(item.raw) === "in_progress") card.classList.add("is-in-progress");
