@@ -103,6 +103,7 @@
   transition: transform var(--motion-fast) var(--ease-standard);
 }
 .spine-card:hover { transform: scale(1.02); }
+.spine-card--gcal { border: 1px dashed var(--border); }
 .spine-card-stripe {
   position: absolute;
   top: 0; left: 0; right: 0;

@@ -12,6 +12,7 @@ import { renderDatePicker } from "./date-picker.js";
 import { QuickAddRules } from "./quickAddRules.js";
 import { renderVerticalTimeline, updateCountdownRings } from "./timeline-vertical.js";
 import { renderHorizontalTimeline } from "./timeline-horizontal.js";
+import { GCalSync } from "./gcal-sync.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -25,6 +26,13 @@ const state = {
   hZoom: "day", // day | week
   hViewDate: new Date(),
   settings: {},
+  // Google Calendar — never persisted beyond these small settings; fetched
+  // events live only in memory for the session, see gcal-sync.js header.
+  gcalConnected: false,
+  gcalCalendars: [], // [{id, summary, backgroundColor, primary}]
+  gcalSelectedIds: [],
+  gcalCategoryMap: {}, // calendarId -> local category id
+  gcalItems: [], // normalized timeline items from the last fetch
 };
 
 const RANGE_PAST_DAYS = 7;
@@ -180,7 +188,100 @@ function buildTimelineItems() {
     }
   }
 
+  for (const gEvt of state.gcalItems) {
+    if (gEvt.start < rangeStart || gEvt.start > rangeEnd) continue;
+    const mappedCategoryId = state.gcalCategoryMap[gEvt.calendarId];
+    const category = mappedCategoryId ? catMap.get(mappedCategoryId) || null : null;
+    items.push({
+      key: `gcal:${gEvt.calendarId}:${gEvt.id}`,
+      sourceType: "gcal",
+      sourceId: gEvt.id,
+      occurrenceDate: gEvt.start,
+      title: gEvt.title,
+      start: gEvt.start,
+      end: gEvt.end,
+      isToday: startOfDay(gEvt.start).getTime() === startOfDay(now).getTime(),
+      isTimed: !gEvt.allDay,
+      allDay: gEvt.allDay,
+      category,
+      categories: category ? [category] : [],
+      importance: "normal",
+      status: null,
+      raw: gEvt,
+      isRecurringInstance: false,
+      isOverride: false,
+    });
+  }
+
   return { items, undatedTasks };
+}
+
+// ---------------------------------------------------------------------------
+// Google Calendar sync (read-only, opt-in — see gcal-sync.js)
+// ---------------------------------------------------------------------------
+
+async function gcalRefreshEvents() {
+  if (!state.gcalConnected || !state.gcalSelectedIds.length) {
+    state.gcalItems = [];
+    return;
+  }
+  const rangeStart = addDays(startOfDay(new Date()), -RANGE_PAST_DAYS);
+  const rangeEnd = addDays(startOfDay(new Date()), RANGE_FUTURE_DAYS);
+  const clientId = await Storage.getSetting("googleClientId", "");
+  try {
+    await GCalSync.ensureFreshToken(clientId);
+  } catch {
+    state.gcalConnected = false;
+    return;
+  }
+  const all = [];
+  for (const calendarId of state.gcalSelectedIds) {
+    try {
+      const raw = await GCalSync.listEvents(calendarId, rangeStart, rangeEnd);
+      for (const gEvt of raw) all.push(GCalSync.normalizeEvent(gEvt, calendarId));
+    } catch {
+      /* one calendar failing (deleted, permission changed) shouldn't block the rest */
+    }
+  }
+  state.gcalItems = all;
+}
+
+async function gcalConnectFlow(clientId) {
+  await GCalSync.connect(clientId);
+  await Storage.setSetting("googleClientId", clientId);
+  state.gcalConnected = true;
+  state.gcalCalendars = await GCalSync.listCalendars();
+  if (!state.gcalSelectedIds.length) {
+    const primary = state.gcalCalendars.find((c) => c.primary);
+    state.gcalSelectedIds = primary ? [primary.id] : [];
+    await Storage.setSetting("gcalSelectedIds", state.gcalSelectedIds);
+  }
+  await gcalRefreshEvents();
+  renderTimeline();
+}
+
+function gcalDisconnectFlow() {
+  GCalSync.disconnect();
+  state.gcalConnected = false;
+  state.gcalCalendars = [];
+  state.gcalItems = [];
+  renderTimeline();
+}
+
+async function gcalTryAutoConnect() {
+  const clientId = await Storage.getSetting("googleClientId", "");
+  state.gcalSelectedIds = await Storage.getSetting("gcalSelectedIds", []);
+  state.gcalCategoryMap = await Storage.getSetting("gcalCategoryMap", {});
+  if (!clientId) return;
+  try {
+    await GCalSync.ensureFreshToken(clientId);
+    state.gcalConnected = true;
+    state.gcalCalendars = await GCalSync.listCalendars();
+    await gcalRefreshEvents();
+  } catch {
+    // No active Google session to silently resume — user re-connects from Settings.
+    state.gcalConnected = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1011,8 +1112,45 @@ function closeModal() {
 }
 
 async function openDetailForItem(item) {
-  if (item.sourceType === "task") await openTaskDetail(item.sourceId, item.occurrenceDate, item.isOverride);
+  if (item.sourceType === "gcal") openGcalDetail(item.raw);
+  else if (item.sourceType === "task") await openTaskDetail(item.sourceId, item.occurrenceDate, item.isOverride);
   else await openEventDetail(item.sourceId, item.occurrenceDate, item.isOverride);
+}
+
+/** Read-only view for a synced Google Calendar event — this app can never edit it. */
+function openGcalDetail(gEvt) {
+  const overlay = document.createElement("div");
+  overlay.className = "modal-overlay";
+  overlay.innerHTML = `
+    <div class="modal-card">
+      <button type="button" class="modal-close-btn" aria-label="Close">×</button>
+      <div class="gcal-badge">📅 Google Calendar</div>
+      <h2 class="modal-heading gcal-detail-title"></h2>
+      <p class="gcal-detail-time"></p>
+      <p class="gcal-detail-location"></p>
+      <p class="gcal-detail-description"></p>
+      <div class="modal-actions">
+        <a class="btn-primary gcal-open-link" target="_blank" rel="noopener noreferrer">Open in Google Calendar</a>
+      </div>
+    </div>`;
+  el.modalRoot.innerHTML = "";
+  el.modalRoot.appendChild(overlay);
+
+  overlay.querySelector(".gcal-detail-title").textContent = gEvt.title;
+  const opts = { hour: "numeric", minute: "2-digit" };
+  overlay.querySelector(".gcal-detail-time").textContent = gEvt.allDay
+    ? `${gEvt.start.toLocaleDateString()} — All day`
+    : `${gEvt.start.toLocaleString([], opts)} – ${gEvt.end.toLocaleTimeString([], opts)}`;
+  overlay.querySelector(".gcal-detail-location").textContent = gEvt.location ? `📍 ${gEvt.location}` : "";
+  overlay.querySelector(".gcal-detail-description").textContent = gEvt.description || "";
+  const link = overlay.querySelector(".gcal-open-link");
+  link.href = gEvt.htmlLink || "#";
+  if (!gEvt.htmlLink) link.style.display = "none";
+
+  overlay.querySelector(".modal-close-btn").addEventListener("click", closeModal);
+  overlay.addEventListener("click", (e) => {
+    if (e.target === overlay) closeModal();
+  });
 }
 
 async function openTaskDetail(taskId, occurrenceDate, isOverride) {
@@ -1478,6 +1616,32 @@ function renderSettingsModal() {
       </section>
 
       <section class="settings-section">
+        <h3>Google Calendar (read-only sync)</h3>
+        <p class="gcal-help-text">
+          Your Google Calendar events show up on the timeline. Nothing created in this app is
+          ever written back to Google — this only ever reads.
+          <button type="button" class="gcal-setup-help-link">How do I get a Client ID?</button>
+        </p>
+        <ol class="gcal-setup-instructions" hidden>
+          <li>Go to the <a href="https://console.cloud.google.com/projectcreate" target="_blank" rel="noopener noreferrer">Google Cloud Console</a> and create a new project (free).</li>
+          <li>Open "APIs &amp; Services" → "Library", search for "Google Calendar API", and click Enable.</li>
+          <li>Open "APIs &amp; Services" → "OAuth consent screen". Choose "External", fill in the required fields, and add yourself as a test user.</li>
+          <li>Open "APIs &amp; Services" → "Credentials" → "Create Credentials" → "OAuth client ID". Application type: "Web application".</li>
+          <li>Under "Authorized JavaScript origins", add this app's URL exactly (e.g. <code>https://yourname.github.io</code> — no trailing slash, no path).</li>
+          <li>Click Create, then copy the Client ID (ends in <code>.apps.googleusercontent.com</code>) into the field below.</li>
+        </ol>
+        <label class="field-label">Google OAuth Client ID
+          <input type="text" class="gcal-client-id-input field-input" placeholder="xxxxxxxx.apps.googleusercontent.com" />
+        </label>
+        <div class="gcal-connect-row">
+          <button type="button" class="btn-secondary gcal-connect-btn">Connect</button>
+          <button type="button" class="btn-secondary gcal-disconnect-btn">Disconnect</button>
+          <span class="gcal-status"></span>
+        </div>
+        <div class="gcal-calendar-list"></div>
+      </section>
+
+      <section class="settings-section">
         <h3>Calendar import</h3>
         <label class="btn-secondary ics-import-btn">
           Import .ics file
@@ -1576,6 +1740,95 @@ function renderSettingsModal() {
     if (permission === "granted") startNotificationEngine();
   });
 
+  overlay.querySelector(".gcal-setup-help-link").addEventListener("click", () => {
+    const instructions = overlay.querySelector(".gcal-setup-instructions");
+    instructions.hidden = !instructions.hidden;
+  });
+
+  const gcalClientIdInput = overlay.querySelector(".gcal-client-id-input");
+  Storage.getSetting("googleClientId", "").then((id) => (gcalClientIdInput.value = id));
+
+  const gcalStatus = overlay.querySelector(".gcal-status");
+  const gcalConnectBtn = overlay.querySelector(".gcal-connect-btn");
+  const gcalDisconnectBtn = overlay.querySelector(".gcal-disconnect-btn");
+  const gcalCalendarList = overlay.querySelector(".gcal-calendar-list");
+
+  function refreshGcalSettingsUI() {
+    gcalStatus.textContent = state.gcalConnected ? "Connected" : "Not connected";
+    gcalConnectBtn.hidden = state.gcalConnected;
+    gcalDisconnectBtn.hidden = !state.gcalConnected;
+    gcalCalendarList.innerHTML = "";
+    if (!state.gcalConnected) return;
+
+    for (const cal of state.gcalCalendars) {
+      const row = document.createElement("div");
+      row.className = "gcal-calendar-row";
+
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = state.gcalSelectedIds.includes(cal.id);
+      checkbox.addEventListener("change", async () => {
+        state.gcalSelectedIds = checkbox.checked
+          ? [...state.gcalSelectedIds, cal.id]
+          : state.gcalSelectedIds.filter((id) => id !== cal.id);
+        await Storage.setSetting("gcalSelectedIds", state.gcalSelectedIds);
+        await gcalRefreshEvents();
+        renderTimeline();
+      });
+
+      const dot = document.createElement("span");
+      dot.className = "gcal-calendar-dot";
+      dot.style.background = cal.backgroundColor;
+
+      const label = document.createElement("span");
+      label.className = "gcal-calendar-name";
+      label.textContent = cal.summary;
+
+      const categorySelect = document.createElement("select");
+      categorySelect.className = "gcal-category-select field-input";
+      const noneOpt = document.createElement("option");
+      noneOpt.value = "";
+      noneOpt.textContent = "No category";
+      categorySelect.appendChild(noneOpt);
+      for (const category of state.categories) {
+        const opt = document.createElement("option");
+        opt.value = category.id;
+        opt.textContent = `${category.icon || "🏷️"} ${category.name}`;
+        if (state.gcalCategoryMap[cal.id] === category.id) opt.selected = true;
+        categorySelect.appendChild(opt);
+      }
+      categorySelect.addEventListener("change", async () => {
+        state.gcalCategoryMap = { ...state.gcalCategoryMap, [cal.id]: categorySelect.value || undefined };
+        await Storage.setSetting("gcalCategoryMap", state.gcalCategoryMap);
+        renderTimeline();
+      });
+
+      row.append(checkbox, dot, label, categorySelect);
+      gcalCalendarList.appendChild(row);
+    }
+  }
+  refreshGcalSettingsUI();
+
+  gcalConnectBtn.addEventListener("click", async () => {
+    const clientId = gcalClientIdInput.value.trim();
+    if (!clientId) {
+      gcalStatus.textContent = "Paste a Client ID first.";
+      return;
+    }
+    gcalStatus.textContent = "Connecting…";
+    try {
+      await gcalConnectFlow(clientId);
+      refreshGcalSettingsUI();
+    } catch (err) {
+      gcalStatus.textContent = `Couldn't connect: ${err.message}`;
+    }
+  });
+
+  gcalDisconnectBtn.addEventListener("click", () => {
+    gcalDisconnectFlow();
+    refreshGcalSettingsUI();
+  });
+
   overlay.querySelector(".ics-file-input").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1643,8 +1896,13 @@ async function init() {
 
   if ("Notification" in window && Notification.permission === "granted") startNotificationEngine();
 
+  // Silent, best-effort — a user who never opted into Google Calendar has no
+  // googleClientId setting, so this resolves immediately and touches nothing.
+  gcalTryAutoConnect().then(() => renderTimeline());
+
   setInterval(() => updateCountdownRings(el.timelineContainer), 30000);
   setInterval(renderTimeline, 60000);
+  setInterval(() => gcalRefreshEvents().then(renderTimeline), 5 * 60000);
 
   if ("serviceWorker" in navigator) {
     navigator.serviceWorker.register("service-worker.js").catch(() => {});

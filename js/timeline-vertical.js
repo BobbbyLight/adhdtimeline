@@ -152,7 +152,7 @@ function renderSpineCard(item, side, { onItemClick, onToggleTaskDone }) {
   if (item.importance === "critical") node.classList.add("spine-node--critical");
 
   const card = document.createElement("div");
-  card.className = "spine-card";
+  card.className = "spine-card" + (item.sourceType === "gcal" ? " spine-card--gcal" : "");
   card.style.setProperty("--card-stripe", categoryStripe(item.categories));
   card.setAttribute("role", "button");
   card.tabIndex = 0;
@@ -162,7 +162,13 @@ function renderSpineCard(item, side, { onItemClick, onToggleTaskDone }) {
 
   const titleRow = document.createElement("div");
   titleRow.className = "spine-card-title-row";
-  if (item.category) {
+  if (item.sourceType === "gcal") {
+    const gcalBadge = document.createElement("span");
+    gcalBadge.className = "spine-card-icon";
+    gcalBadge.title = "From Google Calendar (read-only)";
+    gcalBadge.textContent = "📅";
+    titleRow.appendChild(gcalBadge);
+  } else if (item.category) {
     const icon = document.createElement("span");
     icon.className = "spine-card-icon";
     icon.textContent = item.category.icon || "🏷️";
