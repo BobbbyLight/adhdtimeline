@@ -60,8 +60,11 @@ export function editChunkText(chunks, chunkId, text) {
  * @param {HTMLElement} container
  * @param {{title: string, chunks: Array<{id,text,done}>}} task
  * @param {(nextChunks: Array) => void} onChange called with the updated chunks array
+ * @param {{aiSuggest?: (title: string, categoryNames: string[]) => Promise<string[]>}} [options]
+ *   Optional Gemini-backed suggester (see gemini.js), only fetched on button
+ *   press — never automatically — so it never runs without the user asking.
  */
-export async function renderChunkEditor(container, task, onChange) {
+export async function renderChunkEditor(container, task, onChange, options = {}) {
   const spiceLevel = await getSpiceLevel();
   container.innerHTML = "";
   container.className = "chunk-editor";
@@ -97,6 +100,50 @@ export async function renderChunkEditor(container, task, onChange) {
       suggestWrap.appendChild(chip);
     }
     container.appendChild(suggestWrap);
+  }
+
+  // AI suggestions — explicit opt-in per use, only when Gemini is configured
+  // (see gemini.js); never fired automatically so it never burns a free-tier
+  // quota on its own.
+  if (options.aiSuggest) {
+    const aiWrap = document.createElement("div");
+    aiWrap.className = "chunk-ai-suggest-wrap";
+    const aiBtn = document.createElement("button");
+    aiBtn.type = "button";
+    aiBtn.className = "chunk-ai-suggest-btn";
+    aiBtn.textContent = "✨ AI suggestions";
+    aiBtn.addEventListener("click", async () => {
+      aiBtn.disabled = true;
+      aiBtn.textContent = "Thinking…";
+      try {
+        const suggestions = await options.aiSuggest(task.title, task.categoryNames || []);
+        const filtered = suggestions.filter((s) => !task.chunks.some((c) => c.text === s));
+        aiWrap.innerHTML = "";
+        if (!filtered.length) {
+          const none = document.createElement("span");
+          none.className = "chunk-suggestions-label";
+          none.textContent = "No AI suggestions.";
+          aiWrap.appendChild(none);
+          return;
+        }
+        for (const s of filtered) {
+          const chip = document.createElement("button");
+          chip.type = "button";
+          chip.className = "chunk-suggestion-chip chunk-suggestion-chip--ai";
+          chip.textContent = s;
+          chip.addEventListener("click", () => onChange(addChunk(task.chunks, s)));
+          aiWrap.appendChild(chip);
+        }
+      } catch {
+        aiWrap.innerHTML = "";
+        const err = document.createElement("span");
+        err.className = "chunk-suggestions-label";
+        err.textContent = "Couldn't reach Gemini — try again.";
+        aiWrap.appendChild(err);
+      }
+    });
+    aiWrap.appendChild(aiBtn);
+    container.appendChild(aiWrap);
   }
 
   // Empty step-slots — the spice-level dial controls how many show at once.

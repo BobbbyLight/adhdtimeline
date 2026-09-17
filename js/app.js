@@ -13,6 +13,7 @@ import { QuickAddRules } from "./quickAddRules.js";
 import { renderVerticalTimeline, updateCountdownRings } from "./timeline-vertical.js";
 import { renderHorizontalTimeline } from "./timeline-horizontal.js";
 import { GCalSync } from "./gcal-sync.js";
+import { Gemini } from "./gemini.js";
 
 // ---------------------------------------------------------------------------
 // State
@@ -33,10 +34,13 @@ const state = {
   gcalSelectedIds: [],
   gcalCategoryMap: {}, // calendarId -> local category id
   gcalItems: [], // normalized timeline items from the last fetch
+  // Gemini — opt-in AI assist; see gemini.js header for the tradeoffs.
+  gemini: { apiKey: "", model: "gemini-2.5-flash", useForParsing: true, useForChunking: true },
 };
 
 const RANGE_PAST_DAYS = 7;
 const RANGE_FUTURE_DAYS = 90;
+const DEFAULT_GEMINI_MODEL = "gemini-2.5-flash";
 
 const el = {
   timelineContainer: document.getElementById("timeline-container"),
@@ -282,6 +286,23 @@ async function gcalTryAutoConnect() {
     // No active Google session to silently resume — user re-connects from Settings.
     state.gcalConnected = false;
   }
+}
+
+// ---------------------------------------------------------------------------
+// Gemini AI assist (opt-in — see gemini.js header)
+// ---------------------------------------------------------------------------
+
+async function loadGeminiSettings() {
+  state.gemini = {
+    apiKey: await Storage.getSetting("geminiApiKey", ""),
+    model: await Storage.getSetting("geminiModel", DEFAULT_GEMINI_MODEL),
+    useForParsing: await Storage.getSetting("geminiUseForParsing", true),
+    useForChunking: await Storage.getSetting("geminiUseForChunking", true),
+  };
+}
+
+function geminiConfigured() {
+  return Boolean(state.gemini.apiKey);
 }
 
 // ---------------------------------------------------------------------------
@@ -574,6 +595,41 @@ function openQuickAddPanel(parsed) {
     });
   }
   refreshCategories();
+
+  // Progressive enhancement: the panel above is already fully usable from the
+  // instant local parse. If Gemini is configured, ask it in the background
+  // and only fill in gaps the local parser left — never fight a field the
+  // user has already typed into or a date it already found.
+  if (geminiConfigured() && state.gemini.useForParsing) {
+    const aiStatus = document.createElement("span");
+    aiStatus.className = "qa-ai-status";
+    aiStatus.textContent = "✨ Refining with AI…";
+    titleInput.insertAdjacentElement("afterend", aiStatus);
+
+    Gemini.parseFreeformAI(state.gemini.apiKey, state.gemini.model, parsed.title, new Date())
+      .then((aiResult) => {
+        if (!document.body.contains(overlay)) return; // panel already closed/submitted
+        aiStatus.remove();
+        if (titleInput.value === draft.title && aiResult.title) {
+          titleInput.value = aiResult.title;
+          draft.title = aiResult.title;
+        }
+        if (aiResult.recurrenceRule && !draft.recurrence) {
+          draft.recurrence = { rule: aiResult.recurrenceRule, exceptions: [], overrides: {} };
+        }
+        const currentWhen = whenController.getState();
+        if (currentWhen.mode === "no-date" && aiResult.dueDateISO) {
+          const aiDate = new Date(aiResult.dueDateISO);
+          if (!Number.isNaN(aiDate.getTime())) {
+            const seed = aiResult.allDay
+              ? { mode: "all-day", date: aiDate, startTime: null, endTime: null }
+              : { mode: "timed", date: aiDate, startTime: toHHMM(aiDate), endTime: null };
+            whenController = renderWhenSection(whenContainer, seed, () => {}, { allowNoDate: draft.type === "task" });
+          }
+        }
+      })
+      .catch(() => aiStatus.remove());
+  }
 
   overlay.querySelector(".modal-close-btn").addEventListener("click", closeModal);
   overlay.querySelector(".qa-cancel-btn").addEventListener("click", closeModal);
@@ -1256,10 +1312,17 @@ function renderTaskModal(draft, base, occurrenceDate) {
   const chunkContainer = overlay.querySelector(".task-chunk-editor");
   function refreshChunks() {
     const catNames = (draft.categoryIds || []).map((id) => state.categories.find((c) => c.id === id)?.name).filter(Boolean);
-    Chunking.renderChunkEditor(chunkContainer, { title: draft.title, chunks: draft.chunks, categoryNames: catNames }, (next) => {
-      draft.chunks = next;
-      refreshChunks();
-    });
+    Chunking.renderChunkEditor(
+      chunkContainer,
+      { title: draft.title, chunks: draft.chunks, categoryNames: catNames },
+      (next) => {
+        draft.chunks = next;
+        refreshChunks();
+      },
+      geminiConfigured() && state.gemini.useForChunking
+        ? { aiSuggest: (title, names) => Gemini.suggestChunksAI(state.gemini.apiKey, state.gemini.model, title, names) }
+        : {}
+    );
   }
   refreshChunks();
 
@@ -1642,6 +1705,29 @@ function renderSettingsModal() {
       </section>
 
       <section class="settings-section">
+        <h3>Gemini AI assist (optional)</h3>
+        <p class="gcal-help-text">
+          Used only for quick-add parsing and task-breakdown suggestions, both with local
+          fallbacks that keep working if this isn't set up.
+          <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer">Get a free API key →</a>
+        </p>
+        <label class="field-label">Gemini API key
+          <input type="password" class="gemini-key-input field-input" placeholder="Paste your API key" autocomplete="off" />
+        </label>
+        <label class="field-label">Model
+          <input type="text" class="gemini-model-input field-input" />
+        </label>
+        <label class="gcal-help-text" style="display:flex; align-items:center; gap: var(--space-2);">
+          <input type="checkbox" class="gemini-parsing-checkbox" />
+          Use for quick-add parsing
+        </label>
+        <label class="gcal-help-text" style="display:flex; align-items:center; gap: var(--space-2);">
+          <input type="checkbox" class="gemini-chunking-checkbox" />
+          Use for task-breakdown suggestions
+        </label>
+      </section>
+
+      <section class="settings-section">
         <h3>Calendar import</h3>
         <label class="btn-secondary ics-import-btn">
           Import .ics file
@@ -1829,6 +1915,32 @@ function renderSettingsModal() {
     refreshGcalSettingsUI();
   });
 
+  const geminiKeyInput = overlay.querySelector(".gemini-key-input");
+  const geminiModelInput = overlay.querySelector(".gemini-model-input");
+  const geminiParsingCheckbox = overlay.querySelector(".gemini-parsing-checkbox");
+  const geminiChunkingCheckbox = overlay.querySelector(".gemini-chunking-checkbox");
+  geminiKeyInput.value = state.gemini.apiKey;
+  geminiModelInput.value = state.gemini.model;
+  geminiParsingCheckbox.checked = state.gemini.useForParsing;
+  geminiChunkingCheckbox.checked = state.gemini.useForChunking;
+
+  geminiKeyInput.addEventListener("change", async () => {
+    state.gemini.apiKey = geminiKeyInput.value.trim();
+    await Storage.setSetting("geminiApiKey", state.gemini.apiKey);
+  });
+  geminiModelInput.addEventListener("change", async () => {
+    state.gemini.model = geminiModelInput.value.trim() || DEFAULT_GEMINI_MODEL;
+    await Storage.setSetting("geminiModel", state.gemini.model);
+  });
+  geminiParsingCheckbox.addEventListener("change", async () => {
+    state.gemini.useForParsing = geminiParsingCheckbox.checked;
+    await Storage.setSetting("geminiUseForParsing", state.gemini.useForParsing);
+  });
+  geminiChunkingCheckbox.addEventListener("change", async () => {
+    state.gemini.useForChunking = geminiChunkingCheckbox.checked;
+    await Storage.setSetting("geminiUseForChunking", state.gemini.useForChunking);
+  });
+
   overlay.querySelector(".ics-file-input").addEventListener("change", async (e) => {
     const file = e.target.files[0];
     if (!file) return;
@@ -1877,6 +1989,7 @@ async function init() {
   await reloadData();
 
   state.viewMode = await Storage.getSetting("viewMode", "vertical");
+  await loadGeminiSettings();
 
   setupQuickAdd();
   renderTimeline();
